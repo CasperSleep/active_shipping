@@ -122,6 +122,16 @@ module ActiveShipping
       usps_delivery_confirmation: 4
     }
 
+    class UpsShipmentConfirmation
+      attr_reader :digest, :transportation_charges, :service_options_charges, :total_charges
+      def initialize(digest = nil, transportation_charges = nil, service_options_charges = nil, total_charges = nil)
+        @digest = digest
+        @transportation_charges = transportation_charges
+        @service_options_charges = service_options_charges
+        @total_charges = total_charges
+      end
+    end
+
     def requirements
       [:key, :login, :password]
     end
@@ -158,17 +168,15 @@ module ActiveShipping
         confirm_response = commit(:ship_confirm, save_request(access_request + confirm_request), (options[:test] || false))
         logger.debug(confirm_response) if logger
 
-        # ... now, get the digest, it's needed to get the label.  In theory,
-        # one could make decisions based on the price or some such to avoid
-        # surprises.  This also has *no* error handling yet.
-        xml = parse_ship_confirm(confirm_response)
-        success = response_success?(xml)
-        message = response_message(xml)
-        raise message unless success
-        digest  = response_digest(xml)
+        ship_confirmation = parse_ship_confirm(confirm_response)
+        if block_given?
+          unless yield(ship_confirmation)
+            raise "Shipment terms were not accepted"
+          end
+        end
 
         # STEP 2: Accept. Use shipment digest in first response to get the actual label.
-        accept_request = build_accept_request(digest, options)
+        accept_request = build_accept_request(ship_confirmation.digest, options)
         logger.debug(accept_request) if logger
 
         accept_response = commit(:ship_accept, save_request(access_request + accept_request), (options[:test] || false))
@@ -859,12 +867,30 @@ module ActiveShipping
       [status, desc].select(&:present?).join(": ").presence || "UPS could not process the request."
     end
 
-    def response_digest(xml)
-      xml.root.at('ShipmentDigest').text
-    end
-
     def parse_ship_confirm(response)
-      build_document(response, 'ShipmentConfirmResponse')
+      xml = build_document(response, 'ShipmentConfirmResponse')
+      success = response_success?(xml)
+      message = response_message(xml)
+      raise message unless success
+
+      digest = xml.root.at('ShipmentDigest').text
+
+      transportation_charges = {
+        currency_code: xml.at('TransportationCharges').at('CurrencyCode').text,
+        value: xml.at('TransportationCharges').at('MonetaryValue').text.to_i
+      }
+
+      service_options_charges = {
+        currency_code: xml.at('ServiceOptionsCharges').at('CurrencyCode').text,
+        value: xml.at('ServiceOptionsCharges').at('MonetaryValue').text.to_i
+      }
+
+      total_charges = {
+        currency_code: xml.at('TotalCharges').at('CurrencyCode').text,
+        value: xml.at('TotalCharges').at('MonetaryValue').text.to_i
+      }
+
+      UpsShipmentConfirmation.new(digest, transportation_charges, service_options_charges, total_charges)
     end
 
     def parse_ship_accept(response)

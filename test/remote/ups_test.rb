@@ -238,6 +238,21 @@ class RemoteUPSTest < Minitest::Test
     assert_instance_of ActiveShipping::LabelResponse, response
   end
 
+  def test_halt_label_creation_based_on_price
+    response = @carrier.create_shipment(
+      location_fixtures[:beverly_hills],
+      location_fixtures[:new_york_with_name],
+      package_fixtures.values_at(:chocolate_stuff, :small_half_pound, :american_wii),
+      :test => true,
+      :reference_number => { :value => "FOO-123", :code => "PO" }
+    ) do |ship_confirmation|
+      refute_nil ship_confirmation
+      return false
+    end
+
+    assert response.success?
+  end
+
   def test_delivery_date_estimates_within_zip
     monday = Date.parse('0201', '%m%d') # Feb to avoid holidays http://www.ups.com/content/us/en/resources/ship/imp_exp/operation.html
     monday += 1.day while monday.wday != 1
